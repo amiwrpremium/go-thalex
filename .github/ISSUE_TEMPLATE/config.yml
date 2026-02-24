@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Thalex Documentation
+    url: https://thalex.com/docs
+    about: Official Thalex API documentation

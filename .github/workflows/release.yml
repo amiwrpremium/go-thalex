@@ -1,0 +1,187 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract and validate version
+        id: version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#v}
+
+          # Validate semver format
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            echo "::error::Tag $TAG does not follow semantic versioning (vMAJOR.MINOR.PATCH[-prerelease])"
+            exit 1
+          fi
+
+          # Extract version from config/network.go and compare
+          CODE_VERSION=$(sed -n 's/^const Version = "\(.*\)"/\1/p' config/network.go)
+          if [ "$VERSION" != "$CODE_VERSION" ]; then
+            echo "::error::Tag version ($VERSION) does not match config.Version ($CODE_VERSION)"
+            echo "::error::Update config/network.go: const Version = \"$VERSION\""
+            exit 1
+          fi
+
+          # Detect pre-release
+          PRERELEASE=false
+          if echo "$VERSION" | grep -qE '\-(alpha|beta|rc)'; then
+            PRERELEASE=true
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Tag: $TAG, Version: $VERSION, Pre-release: $PRERELEASE"
+
+  test:
+    name: Release Tests
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Run full test suite
+        run: |
+          go mod download
+          go mod verify
+          go build ./...
+          go vet ./...
+          go test ./... -race -count=1
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [validate, test]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+
+          {
+            echo "body<<RELEASE_NOTES_EOF"
+
+            if [ -z "$PREV_TAG" ]; then
+              echo "## go-thalex $TAG"
+              echo ""
+              echo "Initial release of the go-thalex SDK."
+              echo ""
+              echo "### Installation"
+              echo ""
+              echo '```bash'
+              echo "go get github.com/amiwrpremium/go-thalex@$TAG"
+              echo '```'
+            else
+              echo "## go-thalex $TAG"
+              echo ""
+
+              # Categorize commits by conventional-commit-like prefixes
+              FEATURES=$(git log "${PREV_TAG}..${TAG}" --pretty=format:"- %s (%h)" --grep="^feat" -i 2>/dev/null || true)
+              FIXES=$(git log "${PREV_TAG}..${TAG}" --pretty=format:"- %s (%h)" --grep="^fix" -i 2>/dev/null || true)
+              DOCS=$(git log "${PREV_TAG}..${TAG}" --pretty=format:"- %s (%h)" --grep="^docs" -i 2>/dev/null || true)
+
+              HAS_CATEGORIES=false
+              if [ -n "$FEATURES" ]; then
+                echo "### Features"
+                echo "$FEATURES"
+                echo ""
+                HAS_CATEGORIES=true
+              fi
+              if [ -n "$FIXES" ]; then
+                echo "### Bug Fixes"
+                echo "$FIXES"
+                echo ""
+                HAS_CATEGORIES=true
+              fi
+              if [ -n "$DOCS" ]; then
+                echo "### Documentation"
+                echo "$DOCS"
+                echo ""
+                HAS_CATEGORIES=true
+              fi
+
+              # Fall back to flat list if no conventional commits found
+              if [ "$HAS_CATEGORIES" = "false" ]; then
+                echo "### Changes since $PREV_TAG"
+                echo ""
+                git log "${PREV_TAG}..${TAG}" --pretty=format:"- %s (%h)"
+                echo ""
+              fi
+
+              echo ""
+              echo "### Installation"
+              echo ""
+              echo '```bash'
+              echo "go get github.com/amiwrpremium/go-thalex@$TAG"
+              echo '```'
+              echo ""
+              echo "**Full Changelog**: https://github.com/amiwrpremium/go-thalex/compare/${PREV_TAG}...${TAG}"
+            fi
+
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.notes.outputs.body }}
+          draft: false
+          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
+
+  proxy-warm:
+    name: Warm Go Module Proxy
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - name: Request module from proxy
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          MODULE="github.com/amiwrpremium/go-thalex"
+
+          echo "Warming proxy.golang.org for ${MODULE}@${TAG}..."
+          sleep 10
+
+          # Trigger proxy.golang.org indexing
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://proxy.golang.org/${MODULE}/@v/${TAG}.info")
+          echo "proxy.golang.org response: $STATUS"
+
+          # Trigger sum.golang.org lookup
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://sum.golang.org/lookup/${MODULE}@${TAG}")
+          echo "sum.golang.org response: $STATUS"
+
+          # Trigger pkg.go.dev indexing
+          curl -s "https://pkg.go.dev/${MODULE}@${TAG}" > /dev/null 2>&1 || true
+
+          echo "Proxy warming complete."

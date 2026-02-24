@@ -1,0 +1,124 @@
+version: "2"
+run:
+  modules-download-mode: readonly
+output:
+  formats:
+    text:
+      path: stdout
+linters:
+  enable:
+    - bodyclose
+    - durationcheck
+    - errname
+    - errorlint
+    - forcetypeassert
+    - goconst
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - nilnil
+    - noctx
+    - prealloc
+    - predeclared
+    - revive
+    - unconvert
+    - unparam
+    - whitespace
+  settings:
+    goconst:
+      min-len: 3
+      min-occurrences: 5
+    gocritic:
+      disabled-checks:
+        - hugeParam
+        - rangeValCopy
+      enabled-tags:
+        - diagnostic
+        - performance
+    govet:
+      disable:
+        - fieldalignment
+        - shadow
+      enable-all: true
+    misspell:
+      locale: US
+      extra-words:
+        - typo: cancelled
+          correction: cancelled
+        - typo: realised
+          correction: realised
+        - typo: cancelling
+          correction: cancelling
+        - typo: unauthorised
+          correction: unauthorised
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: increment-decrement
+        - name: var-naming
+          disabled: true
+        - name: package-comments
+          disabled: true
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - errcheck
+          - errorlint
+          - forcetypeassert
+          - gocritic
+          - gosec
+          - goconst
+          - unparam
+          - staticcheck
+        path: _test\.go
+      - linters:
+          - errcheck
+          - gocritic
+          - gosec
+          - noctx
+          - govet
+        path: examples/
+      - linters:
+          - revive
+        path: enums/
+      - linters:
+          - misspell
+        path: (types|ws|rest|internal)/
+        text: "`(cancelled|realised|cancelling)`"
+      - linters:
+          - gosec
+        text: "G704"
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/amiwrpremium/go-thalex
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
